@@ -39,23 +39,35 @@ int telemetry_parse_frame(const char* raw_packet, TelemetryFrame* out_frame)
     }
 
     char temp_subsys[64];
-    int parsed = sscanf(raw_packet, "%u:%hhu:%63[^:]:%f", &out_frame->frame_seq, &out_frame->spw_logical_addr, temp_subsys, &out_frame->measurement);
+    int parsed = sscanf(raw_packet, "%u:%hhu:%63[^:]:%f", 
+                        &out_frame->frame_seq, 
+                        &out_frame->spw_logical_addr, 
+                        temp_subsys, 
+                        &out_frame->measurement);
 
     if (parsed != 4)
     {
         /*
-         * УЯЗВИМОСТЬ CWE-120 (Buffer Overflow):
-         * Резервный тег длиной 28 байт копируется в буфер размером 16 байт (MAX_SUBSYS_LEN).
-         * Cppcheck гарантированно фиксирует bufferAccessOutOfBounds.
+         * ИСПРАВЛЕНИЕ CWE-120 (Buffer Overflow):
+         * 1. Убран промежуточный массив default_subsys, вызывавший переполнение.
+         * 2. Использован безопасный strncpy с вычислением границы sizeof(...) - 1.
+         * 3. Гарантированно выставлен терминальный ноль '\0'.
          */
-        const char backup_tag[] = "SUBSYS_RECOVERY_MODE_ACTIVE";
-        char default_subsys[MAX_SUBSYS_LEN];
-        strcpy(default_subsys, backup_tag);
-        strcpy(out_frame->subsystem_tag, default_subsys);
+        const char backup_tag[] = "RECOVERY";
+        strncpy(out_frame->subsystem_tag, backup_tag, sizeof(out_frame->subsystem_tag) - 1);
+        out_frame->subsystem_tag[sizeof(out_frame->subsystem_tag) - 1] = '\0';
         return -2;
     }
 
-    strcpy(out_frame->subsystem_tag, temp_subsys);
+    /*
+     * ИСПРАВЛЕНИЕ CWE-120 (Buffer Overflow):
+     * Вместо strcpy используется strncpy.
+     * Даже если из сети пришло 63 символа, в буфер запишется ровно столько,
+     * сколько он может вместить, без повреждения стека.
+     */
+    strncpy(out_frame->subsystem_tag, temp_subsys, sizeof(out_frame->subsystem_tag) - 1);
+    out_frame->subsystem_tag[sizeof(out_frame->subsystem_tag) - 1] = '\0';
+
     return 0;
 }
 
@@ -72,7 +84,7 @@ void telemetry_dispatch_frame(const TelemetryFrame* frame)
     if (chan == NULL)
     {
         printf("[ОШИБКА] Подсистема не найдена в реестре НКУ!\n");
-        // ЗАБЫЛИ: return;
+        return; // безопасное заврешние
     }
 
     chan->total_frames++;
