@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build_server:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update -y
+          sudo apt-get install -y cmake gcc
+          cmake -B build -S .
+          cmake --build build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: telemetry-server
+          path: build/telemetry_server
+          retention-days: 1
+
+  smoke_test:
+    runs-on: ubuntu-22.04
+    needs: build_server
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: telemetry-server
+          path: build
+      - run: |
+          chmod +x build/telemetry_server
+          ./build/telemetry_server test
+
+  sast_cppcheck:
+    runs-on: ubuntu-22.04
+    needs: smoke_test
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update -y
+          sudo apt-get install -y cppcheck
+          cppcheck --enable=all --inconclusive --xml --xml-version=2 -I include src/ 2> sast-report.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sast-report
+          path: sast-report.xml
+          retention-days: 1
+
+  security_gate:
+    runs-on: ubuntu-22.04
+    needs: sast_cppcheck
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: sast-report
+      - run: python3 security_gate.py sast-report.xml
